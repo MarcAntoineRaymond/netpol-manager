@@ -13,21 +13,32 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-package main
+package cmd
 
-import "github.com/MarcAntoineRaymond/netpol-manager/cmd"
+import (
+	"fmt"
 
-var (
-	Version    = "dev"
-	Commit     = "none"
-	CommitDate = "unknown"
-	TreeState  = "clean"
+	"github.com/spf13/cobra"
 )
 
-func main() {
-	cmd.Version = Version
-	cmd.Commit = Commit
-	cmd.CommitDate = CommitDate
-	cmd.TreeState = TreeState
-	cmd.Execute()
+var (
+	Version    string
+	Commit     string
+	CommitDate string
+	TreeState  string
+)
+
+func init() {
+	rootCmd.AddCommand(versionCmd)
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the version information",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("Version:    %s\n", Version)
+		fmt.Printf("Commit:     %s\n", Commit)
+		fmt.Printf("CommitDate: %s\n", CommitDate)
+		fmt.Printf("TreeState:  %s\n", TreeState)
+	},
 }
