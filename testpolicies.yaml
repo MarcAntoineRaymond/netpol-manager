@@ -68,3 +68,67 @@ spec:
         - port: 420
         - port: 80
           protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: untitled-clusterpolicy-cilium
+  labels:
+    test: test
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: test
+  ingress:
+    - {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app: back
+            io.kubernetes.pod.namespace: kube-system
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: UDP
+            - port: "8080"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app: front
+      toPorts:
+        - ports:
+            - port: "420"
+            - port: "80"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: untitled-hostpolicy-cilium
+  labels:
+    test: test
+spec:
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/os: linux
+  ingress:
+    - {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app: back
+            io.kubernetes.pod.namespace: kube-system
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: UDP
+            - port: "8080"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            app: front
+      toPorts:
+        - ports:
+            - port: "420"
+            - port: "80"
+              protocol: TCP

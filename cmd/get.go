@@ -559,14 +559,19 @@ func SummarizeCiliumNetworkPolicies(nps []ciliumv2.CiliumNetworkPolicy) ([]Netpo
 func SummarizeCiliumClusterWideNetworkPolicies(nps []ciliumv2.CiliumClusterwideNetworkPolicy) ([]NetpolSummary, error) {
 	summaries := []NetpolSummary{}
 	for _, np := range nps {
-		selectors, err := ConvertEndpointSelectorToLabelSelector(np.Spec.EndpointSelector)
-		if err != nil {
-			return []NetpolSummary{}, err
-		}
 		if !np.Spec.NodeSelector.IsZero() {
 			// Skip policies that apply to nodes
 			continue
 		}
+		if np.Spec.EndpointSelector.IsZero() {
+			// Skip policies that do not define endpoint selector
+			continue
+		}
+		selectors, err := ConvertEndpointSelectorToLabelSelector(np.Spec.EndpointSelector)
+		if err != nil {
+			return []NetpolSummary{}, err
+		}
+
 		summary := NetpolSummary{
 			Kind:         np.Kind,
 			Namespace:    "*",
