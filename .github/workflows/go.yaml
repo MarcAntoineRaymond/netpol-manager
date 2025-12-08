@@ -2,9 +2,9 @@ name: Go lint, test and gosec
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "master" ]
     paths:
       - '**.go'
       - 'go.mod'
