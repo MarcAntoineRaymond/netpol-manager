@@ -301,7 +301,7 @@ func SummarizeNetpolRule(fromTo []v1.NetworkPolicyPeer, ports []v1.NetworkPolicy
 			portString += "/" + string(*port.Protocol)
 		}
 	}
-	if peerString == "" {
+	if peerString == "" && portString == "" {
 		peerString = "X"
 	}
 	return peerString, portString
@@ -503,7 +503,7 @@ func SummarizeCiliumNetpolRule(ciliumRule CiliumNetpolRule, ports ciliumpolicy.P
 		}
 	}
 
-	if peerString == "" {
+	if peerString == "" && portString == "" {
 		peerString = "X"
 	}
 
@@ -614,6 +614,9 @@ func displayNetpolSummaries(nps []NetpolSummary) {
 		}},
 		{Header: "NAME", Enable: true, Value: func(r NetpolSummary) string {
 			return r.Name
+		}},
+		{Header: "POD-SELECTOR", Enable: true, Value: func(r NetpolSummary) string {
+			return metav1.FormatLabelSelector(&r.PodSelector)
 		}},
 		{Header: "INGRESS", Enable: getOptions.ShowIngress, Value: func(r NetpolSummary) string {
 			return r.IngressRules

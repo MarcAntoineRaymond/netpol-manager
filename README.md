@@ -25,10 +25,17 @@ kubectl netpol get -A
 
 Sample with testpolicies:
 ```sh
-kubectl netpol get -p app.kubernetes.io/name=test -A
-Kind                  Namespace        Name                     Pod-Selector                  Ingress   Egress
-CiliumNetworkPolicy   authentication   untitled-policy-cilium   app.kubernetes.io/name=test   <=X       =>kube-system/app=back : 443/UDP, 8080/TCP
-                                                                                                        =>app=front : 420, 80/TCP
-CiliumNetworkPolicy   authentication   untitled-policy-cilium   app.kubernetes.io/name=test   <=X       =>kube-system/app=back : 443/UDP, 8080/TCP
-                                                                                                        =>app=front : 420, 80/TCP
+kubectl netpol get --show-kind -A -p app.kubernetes.io/name=test
+KIND                NAMESPACE      NAME                   POD-SELECTOR                INGRESS EGRESS
+------------------- -------------- ---------------------- --------------------------- ------- --------------------------------------------------------------------
+CiliumNetworkPolicy authentication untitled-policy-cilium app.kubernetes.io/name=test <=X     =>kube-system/app=back : 443/UDP, 8080/TCP
+                                                                                              =>app=front : 420, 80/TCP
+
+kubectl netpol get -A
+NAMESPACE      NAME                   POD-SELECTOR                     INGRESS EGRESS
+-------------- ---------------------- -------------------------------- ------- ------------------------------------------------------------------------
+default        untitled-policy        app.kubernetes.io/name=keycloakx <=X     =>kube-system/app=back : 443/UDP, 8080/TCP
+                                                                               =>app=front : 420/TCP, 80/TCP
+authentication untitled-policy-cilium app.kubernetes.io/name=test      <=X     =>kube-system/app=back : 443/UDP, 8080/TCP
+                                                                               =>app=front : 420, 80/TCP
 ```
