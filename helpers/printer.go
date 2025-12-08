@@ -17,7 +17,10 @@ package helpers
 
 import (
 	"fmt"
+	"os"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 type Table struct {
@@ -25,51 +28,105 @@ type Table struct {
 	Rows    [][]string // each row = slice of column cell strings (may contain \n)
 }
 
-func PrintMultilineTable(t Table) {
-	colWidths := make([]int, len(t.Headers))
+func terminalWidth() int {
+	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 80 // fallback
+	}
+	return w
+}
 
-	splitRows := make([][][]string, len(t.Rows))
-	for i, row := range t.Rows {
-		splitRows[i] = make([][]string, len(row))
-		for colIdx, cell := range row {
-			lines := strings.Split(cell, "\n")
-			splitRows[i][colIdx] = lines
-			for _, ln := range lines {
-				if len(ln) > colWidths[colIdx] {
-					colWidths[colIdx] = len(ln)
-				}
+func wrapCell(cell string, width int) []string {
+	// Split on explicit newlines first
+	rawLines := strings.Split(cell, "\n")
+	var out []string
+
+	for _, line := range rawLines {
+		for len(line) > width {
+			out = append(out, line[:width])
+			line = line[width:]
+		}
+		out = append(out, line)
+	}
+
+	return out
+}
+
+func PrintTable(table Table) {
+	termWidth := terminalWidth()
+
+	// Find max column widths based on header + data
+	colWidths := make([]int, len(table.Headers))
+	for i, h := range table.Headers {
+		colWidths[i] = len(h)
+	}
+	for _, row := range table.Rows {
+		for i, cell := range row {
+			if len(cell) > colWidths[i] {
+				colWidths[i] = len(cell)
 			}
 		}
 	}
 
-	for i, h := range t.Headers {
-		if len(h) > colWidths[i] {
-			colWidths[i] = len(h)
+	// Reduce column widths so total fits terminal
+	totalWidth := len(colWidths) - 1 // account for spaces
+	for _, w := range colWidths {
+		totalWidth += w
+	}
+
+	if totalWidth > termWidth {
+		excess := totalWidth - termWidth
+		// shrink the widest columns first
+		for excess > 0 {
+			largest := 0
+			idx := 0
+			for i, w := range colWidths {
+				if w > largest {
+					largest = w
+					idx = i
+				}
+			}
+			if colWidths[idx] > 10 { // prevent collapsing too much
+				colWidths[idx]--
+				excess--
+			} else {
+				break
+			}
 		}
 	}
 
-	for i, h := range t.Headers {
-		fmt.Printf("%-*s   ", colWidths[i], h)
+	// Print header
+	for i, h := range table.Headers {
+		fmt.Printf("%-*s ", colWidths[i], h)
 	}
 	fmt.Println()
 
-	for _, row := range splitRows {
+	// Print separator
+	for _, w := range colWidths {
+		fmt.Print(strings.Repeat("-", w) + " ")
+	}
+	fmt.Println()
+
+	// Print rows with wrapping
+	for _, row := range table.Rows {
+		// compute wrapped lines for each column
+		wrapped := make([][]string, len(row))
 		maxLines := 1
-		for _, cellLines := range row {
-			if len(cellLines) > maxLines {
-				maxLines = len(cellLines)
+		for i, cell := range row {
+			wrapped[i] = wrapCell(cell, colWidths[i])
+			if len(wrapped[i]) > maxLines {
+				maxLines = len(wrapped[i])
 			}
 		}
 
+		// print row line-by-line
 		for line := 0; line < maxLines; line++ {
-			for colIdx, cellLines := range row {
-				var text string
-				if line < len(cellLines) {
-					text = cellLines[line]
-				} else {
-					text = ""
+			for col := range colWidths {
+				part := ""
+				if line < len(wrapped[col]) {
+					part = wrapped[col][line]
 				}
-				fmt.Printf("%-*s   ", colWidths[colIdx], text)
+				fmt.Printf("%-*s ", colWidths[col], part)
 			}
 			fmt.Println()
 		}

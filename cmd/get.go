@@ -45,6 +45,9 @@ type GetOptions struct {
 	podLabels     string
 	pod           string
 	AllNamespaces bool
+	ShowKind      bool
+	ShowIngress   bool
+	ShowEgress    bool
 }
 
 var getOptions *GetOptions
@@ -64,6 +67,9 @@ func init() {
 		kind:          "",
 		podLabels:     "",
 		AllNamespaces: false,
+		ShowKind:      false,
+		ShowIngress:   true,
+		ShowEgress:    true,
 	}
 	rootCmd.AddCommand(getCmd)
 	getCmd.Flags().StringVarP(&getOptions.labelSelector, "selector", "l", "", "Label selector (e.g., -l key=value)")
@@ -71,6 +77,9 @@ func init() {
 	getCmd.Flags().StringVar(&getOptions.pod, "pod", "", "Prints only network policies that apply to this pod, cannot be used with --pod-labels")
 	getCmd.Flags().StringVarP(&getOptions.kind, "kind", "k", "", "Kind of network policy (e.g., NetworkPolicy, CiliumNetworkPolicy) by default both kinds are shown if crd exists")
 	getCmd.Flags().BoolVarP(&getOptions.AllNamespaces, "all-namespaces", "A", false, "Get network policies across all namespaces")
+	getCmd.Flags().BoolVar(&getOptions.ShowKind, "show-kind", false, "Show resource kind in output")
+	getCmd.Flags().BoolVar(&getOptions.ShowIngress, "show-ingress", true, "Show ingress rules in output")
+	getCmd.Flags().BoolVar(&getOptions.ShowEgress, "show-egress", true, "Show egress rules in output")
 	getCmd.MarkFlagsMutuallyExclusive("pod-labels", "pod")
 }
 
@@ -166,13 +175,13 @@ var getCmd = &cobra.Command{
 				if !exists {
 					fmt.Println("CiliumClusterWideNetworkPolicy CRD does not exist, but 'CiliumClusterWideNetworkPolicy' kind was explicitly requested.")
 				}
-				cnpList, err := ListCiliumNetworkPolicies(context.TODO(), config, ns)
+				ccnpList, err := ListCiliumClusterWideNetworkPolicies(context.TODO(), config)
 				if err != nil {
 					fmt.Println(err)
 					return //err
 				}
 
-				ciliumSummaries, err := SummarizeCiliumNetworkPolicies(cnpList.Items)
+				ciliumSummaries, err := SummarizeCiliumClusterWideNetworkPolicies(ccnpList.Items)
 				if err != nil {
 					fmt.Println(err)
 					return //err
@@ -589,24 +598,56 @@ func ConvertEndpointSelectorToLabelSelector(es ciliumpolicy.EndpointSelector) (*
 	return ls, nil
 }
 
+type Column struct {
+	Header string
+	Enable bool
+	Value  func(row NetpolSummary) string
+}
+
 func displayNetpolSummaries(nps []NetpolSummary) {
-	table := helpers.Table{
-		Headers: []string{"Kind", "Namespace", "Name", "Pod-Selector", "Ingress", "Egress"},
+	cols := []Column{
+		{Header: "KIND", Enable: getOptions.ShowKind, Value: func(r NetpolSummary) string {
+			return r.Kind
+		}},
+		{Header: "NAMESPACE", Enable: getOptions.AllNamespaces, Value: func(r NetpolSummary) string {
+			return r.Namespace
+		}},
+		{Header: "NAME", Enable: true, Value: func(r NetpolSummary) string {
+			return r.Name
+		}},
+		{Header: "INGRESS", Enable: getOptions.ShowIngress, Value: func(r NetpolSummary) string {
+			return r.IngressRules
+		}},
+		{Header: "EGRESS", Enable: getOptions.ShowEgress, Value: func(r NetpolSummary) string {
+			return r.EgressRules
+		}},
 	}
 
-	for _, np := range nps {
-		table.Rows = append(table.Rows,
-			[]string{
-				np.Kind,
-				np.Namespace,
-				np.Name,
-				metav1.FormatLabelSelector(&np.PodSelector),
-				np.IngressRules,
-				np.EgressRules,
-			},
-		)
+	var activeCols []Column
+	for _, c := range cols {
+		if c.Enable {
+			activeCols = append(activeCols, c)
+		}
 	}
-	helpers.PrintMultilineTable(table)
+
+	headers := make([]string, len(activeCols))
+	for i, c := range activeCols {
+		headers[i] = c.Header
+	}
+
+	var tableRows [][]string
+	for _, np := range nps {
+		row := make([]string, len(activeCols))
+		for i, c := range activeCols {
+			row[i] = c.Value(np)
+		}
+		tableRows = append(tableRows, row)
+	}
+	table := helpers.Table{
+		Headers: headers,
+		Rows:    tableRows,
+	}
+	helpers.PrintTable(table)
 }
 
 func CheckCiliumCRDExists(ctx context.Context, config *rest.Config, crdName string) (bool, error) {
