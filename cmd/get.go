@@ -577,7 +577,7 @@ func ConvertEndpointSelectorToLabelSelector(es ciliumpolicy.EndpointSelector) (*
 		MatchExpressions: []metav1.LabelSelectorRequirement{},
 	}
 
-	for _, lbl := range es.LabelSelector.MatchExpressions {
+	for _, lbl := range es.MatchExpressions {
 		req := metav1.LabelSelectorRequirement{
 			Key:      lbl.Key,
 			Operator: metav1.LabelSelectorOperator(lbl.Operator),
