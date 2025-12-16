@@ -21,62 +21,231 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-type Table struct {
-	Headers []string
-	Rows    [][]string // each row = slice of column cell strings (may contain \n)
+type Ports struct {
+	Protocol string
+	Port     string
 }
+
+func (ports Ports) String() string {
+	return fmt.Sprintf("%s/%s", ports.Protocol, ports.Port)
+}
+
+// One ingress or egress rule
+type RuleView struct {
+	Endpoints []string
+	Ports     []Ports
+}
+
+// A network policy row
+type PolicyView struct {
+	Kind        string
+	Namespace   string
+	Name        string
+	PodSelector metav1.LabelSelector
+	Ingress     []RuleView
+	Egress      []RuleView
+}
+
+/**************
+ * TERMINAL WIDTH
+ **************/
 
 func terminalWidth() int {
 	w, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
-		return 80 // fallback
+		return 100
 	}
 	return w
 }
 
+/**************
+ * BUILD SUBCOLUMN CELL (INGRESS/EGRESS)
+ **************/
+
+// Convert []RuleView → multiline string with 2 subcolumns per line (EP + Ports)
+func BuildRuleCell(rules []RuleView) string {
+	var lines []string
+
+	for _, r := range rules {
+		max := len(r.Endpoints)
+		if len(r.Ports) > max {
+			max = len(r.Ports)
+		}
+
+		eps := append([]string{}, r.Endpoints...)
+		ports := []string{}
+		for port := range r.Ports {
+			ports = append(ports, r.Ports[port].String())
+		}
+		pts := append([]string{}, ports...)
+
+		for len(eps) < max {
+			eps = append(eps, "")
+		}
+		for len(pts) < max {
+			pts = append(pts, "")
+		}
+
+		for i := 0; i < max; i++ {
+			// TAB separates mini sub-columns
+			lines = append(lines, eps[i]+"\t"+pts[i])
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+/**************
+ * WRAP MULTILINE CELL WITH SUBCOLUMNS
+ **************/
+
 func wrapCell(cell string, width int) []string {
-	// Split on explicit newlines first
 	rawLines := strings.Split(cell, "\n")
 	var out []string
 
+	// hardcoded subcolumn widths; you can adjust
+	endpointWidth := width / 2
+	portWidth := width - endpointWidth - 1 // -1 for space between
+
 	for _, line := range rawLines {
-		for len(line) > width {
-			out = append(out, line[:width])
-			line = line[width:]
+
+		// If using subcolumns (TAB)
+		if strings.Contains(line, "\t") {
+			parts := strings.SplitN(line, "\t", 2)
+			ep := parts[0]
+			pt := ""
+			if len(parts) > 1 {
+				pt = parts[1]
+			}
+
+			// wrap endpoint column
+			epLines := wrapText(ep, endpointWidth)
+			ptLines := wrapText(pt, portWidth)
+
+			max := len(epLines)
+			if len(ptLines) > max {
+				max = len(ptLines)
+			}
+
+			// pad
+			for len(epLines) < max {
+				epLines = append(epLines, "")
+			}
+			for len(ptLines) < max {
+				ptLines = append(ptLines, "")
+			}
+
+			// combine 2 subcolumns
+			for i := 0; i < max; i++ {
+				out = append(out, fmt.Sprintf("%-*s %-*s",
+					endpointWidth, epLines[i],
+					portWidth, ptLines[i],
+				))
+			}
+
+		} else {
+			// Regular wrapping
+			out = append(out, wrapText(line, width)...)
 		}
-		out = append(out, line)
 	}
 
 	return out
 }
 
-func PrintTable(table Table) {
+// Basic wrapper
+func wrapText(s string, width int) []string {
+	if width < 5 {
+		width = 5
+	}
+	if len(s) <= width {
+		return []string{s}
+	}
+
+	var out []string
+	for len(s) > width {
+		out = append(out, s[:width])
+		s = s[width:]
+	}
+	if len(s) > 0 {
+		out = append(out, s)
+	}
+	return out
+}
+
+/**************
+ * COLUMN FILTERING
+ **************/
+
+func filterColumns(headers []string, rows [][]string, show []bool) ([]string, [][]string) {
+	var newHeaders []string
+	var newRows [][]string
+
+	for i, h := range headers {
+		if show[i] {
+			newHeaders = append(newHeaders, h)
+		}
+	}
+
+	for _, row := range rows {
+		var newRow []string
+		for i, cell := range row {
+			if show[i] {
+				newRow = append(newRow, cell)
+			}
+		}
+		newRows = append(newRows, newRow)
+	}
+
+	return newHeaders, newRows
+}
+
+/**************
+ * TABLE RENDERING
+ **************/
+
+func PrintTable(headers []string, rows [][]string) {
 	termWidth := terminalWidth()
 
-	// Find max column widths based on header + data
-	colWidths := make([]int, len(table.Headers))
-	for i, h := range table.Headers {
+	colWidths := make([]int, len(headers))
+
+	// Initial width guess
+	for i, h := range headers {
 		colWidths[i] = len(h)
 	}
-	for _, row := range table.Rows {
+
+	// Account for data (measure long lines)
+	for _, row := range rows {
 		for i, cell := range row {
-			if len(cell) > colWidths[i] {
-				colWidths[i] = len(cell)
+			for _, l := range strings.Split(cell, "\n") {
+				// If subcolumns, measure each separately
+				if strings.Contains(l, "\t") {
+					parts := strings.SplitN(l, "\t", 2)
+					// Sum of subcolumns roughly equals column
+					w := len(parts[0]) + len(parts[1]) + 1
+					if w > colWidths[i] {
+						colWidths[i] = w
+					}
+				} else {
+					if len(l) > colWidths[i] {
+						colWidths[i] = len(l)
+					}
+				}
 			}
 		}
 	}
 
-	// Reduce column widths so total fits terminal
-	totalWidth := len(colWidths) - 1 // account for spaces
+	// Shrink to fit terminal
+	totalWidth := len(colWidths) - 1
 	for _, w := range colWidths {
 		totalWidth += w
 	}
 
 	if totalWidth > termWidth {
 		excess := totalWidth - termWidth
-		// shrink the widest columns first
 		for excess > 0 {
 			largest := 0
 			idx := 0
@@ -86,7 +255,7 @@ func PrintTable(table Table) {
 					idx = i
 				}
 			}
-			if colWidths[idx] > 10 { // prevent collapsing too much
+			if colWidths[idx] > 10 {
 				colWidths[idx]--
 				excess--
 			} else {
@@ -96,32 +265,31 @@ func PrintTable(table Table) {
 	}
 
 	// Print header
-	for i, h := range table.Headers {
+	for i, h := range headers {
 		fmt.Printf("%-*s ", colWidths[i], h)
 	}
 	fmt.Println()
 
-	// Print separator
+	// Separator
 	for _, w := range colWidths {
-		fmt.Print(strings.Repeat("-", w) + " ")
+		fmt.Print(strings.Repeat("-", w), " ")
 	}
 	fmt.Println()
 
-	// Print rows with wrapping
-	for _, row := range table.Rows {
-		// compute wrapped lines for each column
+	// Data rows
+	for _, row := range rows {
 		wrapped := make([][]string, len(row))
-		maxLines := 1
+		max := 1
+
 		for i, cell := range row {
 			wrapped[i] = wrapCell(cell, colWidths[i])
-			if len(wrapped[i]) > maxLines {
-				maxLines = len(wrapped[i])
+			if len(wrapped[i]) > max {
+				max = len(wrapped[i])
 			}
 		}
 
-		// print row line-by-line
-		for line := 0; line < maxLines; line++ {
-			for col := range colWidths {
+		for line := 0; line < max; line++ {
+			for col := range wrapped {
 				part := ""
 				if line < len(wrapped[col]) {
 					part = wrapped[col][line]
@@ -131,4 +299,37 @@ func PrintTable(table Table) {
 			fmt.Println()
 		}
 	}
+}
+
+type ColumnFilters struct {
+	Kind        bool
+	Namespace   bool
+	Name        bool
+	PodSelector bool
+	Ingress     bool
+	Egress      bool
+}
+
+type Column struct {
+	Header string
+	Enable bool
+	Value  func(row PolicyView) string
+}
+
+func PoliciesToTableRows(policies []PolicyView, columns []Column) (headers []string, rows [][]string) {
+
+	headers = make([]string, len(columns))
+	for i, c := range columns {
+		headers[i] = c.Header
+	}
+
+	for _, policy := range policies {
+		row := make([]string, len(columns))
+		for i, c := range columns {
+			row[i] = c.Value(policy)
+		}
+		rows = append(rows, row)
+	}
+
+	return headers, rows
 }
