@@ -27,21 +27,22 @@ kubectl netpol get -A
 
 Sample with testpolicies:
 ```sh
-kubectl netpol get --show-kind -A -p app.kubernetes.io/name=test
-┌────────────────┬───────────────────────────────┬──────────────────────────────────┬────────────────────────┬───────────────┬────────────────────────┬──────────────┐
-│   NAMESPACE    │             NAME              │           POD-SELECTOR           │        INGRESS         │ INGRESS-PORTS │         EGRESS         │ EGRESS-PORTS │
-├────────────────┼───────────────────────────────┼──────────────────────────────────┼────────────────────────┼───────────────┼────────────────────────┼──────────────┤
-│ authentication │ untitled-policy-cilium        │ app.kubernetes.io/name=test      │ kube-system/app=back   │ UDP/443       │ kube-system/app=back   │ UDP/443      │
-│                │                               │                                  │ security/app=test      │ TCP/8080      │ security/app=test      │ ANY/8080     │
-│                │                               │                                  │ cert-manager/app=front │               │ cert-manager/app=front │              │
-│                │                               │                                  ├────────────────────────┼───────────────┼────────────────────────┼──────────────┤
-│                │                               │                                  │                        │               │ app=front              │ ANY/420      │
-│                │                               │                                  │                        │               │                        │ TCP/80       │
-├────────────────┼───────────────────────────────┤                                  ├────────────────────────┼───────────────┼────────────────────────┼──────────────┤
-│ *              │ untitled-clusterpolicy-cilium │                                  │ <defaultdeny>          │               │ kube-system/app=back   │ UDP/443      │
-│                │                               │                                  │                        │               │                        │ TCP/8080     │
-│                │                               │                                  ├────────────────────────┼───────────────┼────────────────────────┼──────────────┤
-│                │                               │                                  │                        │               │ app=front              │ ANY/420      │
-│                │                               │                                  │                        │               │                        │ TCP/80       │
-└────────────────┴───────────────────────────────┴──────────────────────────────────┴────────────────────────┴───────────────┴────────────────────────┴──────────────┘
+# Show all networkpolicies in all namespaces of all kinds (classic network policies and cilium kinds) that apply to pods with label app.kubernetes.io/name=test
+kubectl netpol get -A -p app.kubernetes.io/name=test --show-kind
+┌────────────────────────────────┬────────────────┬───────────────────────────────┬─────────────────────────────┬────────────────────────┬───────────────┬────────────────────────┬──────────────┐
+│              KIND              │   NAMESPACE    │             NAME              │        POD-SELECTOR         │        INGRESS         │ INGRESS-PORTS │         EGRESS         │ EGRESS-PORTS │
+├────────────────────────────────┼────────────────┼───────────────────────────────┼─────────────────────────────┼────────────────────────┼───────────────┼────────────────────────┼──────────────┤
+│ CiliumNetworkPolicy            │ authentication │ untitled-policy-cilium        │ <none>                      │ kube-system/app=back   │ UDP/443       │ kube-system/app=back   │ UDP/443      │
+│                                │                │                               │                             │ security/app=test      │ TCP/8080      │ security/app=test      │ ANY/8080     │
+│                                │                │                               │                             │ cert-manager/app=front │               │ cert-manager/app=front │              │
+│                                │                │                               │                             ├────────────────────────┼───────────────┼────────────────────────┼──────────────┤
+│                                │                │                               │                             │                        │               │ app=front              │ ANY/420      │
+│                                │                │                               │                             │                        │               │                        │ TCP/80       │
+├────────────────────────────────┼────────────────┼───────────────────────────────┼─────────────────────────────┼────────────────────────┼───────────────┼────────────────────────┼──────────────┤
+│ CiliumClusterwideNetworkPolicy │ *              │ untitled-clusterpolicy-cilium │ app.kubernetes.io/name=test │ <defaultdeny>          │               │ kube-system/app=back   │ UDP/443      │
+│                                │                │                               │                             │                        │               │                        │ TCP/8080     │
+│                                │                │                               │                             ├────────────────────────┼───────────────┼────────────────────────┼──────────────┤
+│                                │                │                               │                             │                        │               │ app=front              │ ANY/420      │
+│                                │                │                               │                             │                        │               │                        │ TCP/80       │
+└────────────────────────────────┴────────────────┴───────────────────────────────┴─────────────────────────────┴────────────────────────┴───────────────┴────────────────────────┴──────────────┘
 ```
