@@ -360,6 +360,9 @@ func buildRuleViewFromCiliumIngressRules(ingresses []ciliumpolicy.IngressRule, i
 				})
 			}
 		}
+		if len(peerEndpoints) == 0 && len(peerPorts) == 0 {
+			peerEndpoints = append(peerEndpoints, "<defaultdeny>")
+		}
 		rules = append(rules, helpers.RuleView{
 			Endpoints: peerEndpoints,
 			Ports:     peerPorts,
@@ -586,24 +589,14 @@ func ListCiliumClusterWideNetworkPolicies(
 
 func displayPolicies(policies []helpers.PolicyView) {
 	cols := []helpers.Column{
-		{Header: "KIND", Enable: getOptions.ShowKind, Value: func(r helpers.PolicyView) string {
-			return r.Kind
-		}},
-		{Header: "NAMESPACE", Enable: getOptions.AllNamespaces, Value: func(r helpers.PolicyView) string {
-			return r.Namespace
-		}},
-		{Header: "NAME", Enable: true, Value: func(r helpers.PolicyView) string {
-			return r.Name
-		}},
-		{Header: "POD-SELECTOR", Enable: true, Value: func(r helpers.PolicyView) string {
-			return metav1.FormatLabelSelector(&r.PodSelector)
-		}},
-		{Header: "INGRESS", Enable: getOptions.ShowIngress, Value: func(r helpers.PolicyView) string {
-			return helpers.BuildRuleCell(r.Ingress)
-		}},
-		{Header: "EGRESS", Enable: getOptions.ShowEgress, Value: func(r helpers.PolicyView) string {
-			return helpers.BuildRuleCell(r.Egress)
-		}},
+		{Header: "KIND", Enable: getOptions.ShowKind},
+		{Header: "NAMESPACE", Enable: getOptions.AllNamespaces},
+		{Header: "NAME", Enable: true},
+		{Header: "POD-SELECTOR", Enable: true},
+		{Header: "INGRESS", Enable: getOptions.ShowIngress},
+		{Header: "INGRESS-PORTS", Enable: getOptions.ShowIngress},
+		{Header: "EGRESS", Enable: getOptions.ShowEgress},
+		{Header: "EGRESS-PORTS", Enable: getOptions.ShowEgress},
 	}
 
 	var activeCols []helpers.Column
@@ -613,5 +606,5 @@ func displayPolicies(policies []helpers.PolicyView) {
 		}
 	}
 
-	helpers.PrintTable(helpers.PoliciesToTableRows(policies, activeCols))
+	helpers.RenderTable(helpers.PoliciesToTableRows(policies, activeCols))
 }
