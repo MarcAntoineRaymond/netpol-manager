@@ -52,15 +52,6 @@ type GetOptions struct {
 
 var getOptions *GetOptions
 
-type NetpolSummary struct {
-	Kind         string
-	Namespace    string
-	Name         string
-	PodSelector  metav1.LabelSelector
-	IngressRules string
-	EgressRules  string
-}
-
 func init() {
 	getOptions = &GetOptions{
 		labelSelector: "",
@@ -121,7 +112,7 @@ var getCmd = &cobra.Command{
 		}
 
 		kinds := strings.Split(getOptions.kind, ",")
-		var summaries []NetpolSummary
+		var policyViews []helpers.PolicyView
 
 		// List NetworkPolicies
 		if HasAllowedKind(kinds, netpolAliases) || getOptions.kind == "" {
@@ -133,7 +124,9 @@ var getCmd = &cobra.Command{
 				return //err
 			}
 
-			summaries = append(summaries, SummarizeNetworkPolicies(list.Items)...)
+			for _, np := range list.Items {
+				policyViews = append(policyViews, NetworkPolicyToView(np))
+			}
 		}
 		hasCnpKind := HasAllowedKind(kinds, ciliumNetpolAliases)
 		if hasCnpKind || getOptions.kind == "" {
@@ -153,13 +146,9 @@ var getCmd = &cobra.Command{
 					return //err
 				}
 
-				ciliumSummaries, err := SummarizeCiliumNetworkPolicies(cnpList.Items)
-				if err != nil {
-					fmt.Println(err)
-					return //err
+				for _, cnp := range cnpList.Items {
+					policyViews = append(policyViews, CiliumNetworkPolicyToView(cnp))
 				}
-
-				summaries = append(summaries, ciliumSummaries...)
 			}
 		}
 
@@ -181,13 +170,13 @@ var getCmd = &cobra.Command{
 					return //err
 				}
 
-				ciliumSummaries, err := SummarizeCiliumClusterWideNetworkPolicies(ccnpList.Items)
-				if err != nil {
-					fmt.Println(err)
-					return //err
+				for _, ccnp := range ccnpList.Items {
+					if ccnp.Spec.EndpointSelector.IsZero() {
+						// Skip host policies
+						continue
+					}
+					policyViews = append(policyViews, CiliumClusterWideNetworkPolicyToView(ccnp))
 				}
-
-				summaries = append(summaries, ciliumSummaries...)
 			}
 		}
 
@@ -203,8 +192,8 @@ var getCmd = &cobra.Command{
 		}
 
 		if filterLabels != "" {
-			var filteredItems []NetpolSummary
-			for _, np := range summaries {
+			var filteredItems []helpers.PolicyView
+			for _, np := range policyViews {
 				if ok, err := CheckLabelSelectorMatch(filterLabels, np.PodSelector); ok {
 					if err != nil {
 						fmt.Printf("Error comparing label selectors: %v\n", err)
@@ -213,10 +202,10 @@ var getCmd = &cobra.Command{
 					filteredItems = append(filteredItems, np)
 				}
 			}
-			summaries = filteredItems
+			policyViews = filteredItems
 		}
 
-		displayNetpolSummaries(summaries)
+		displayPolicies(policyViews)
 	},
 }
 
@@ -243,346 +232,287 @@ func HasAllowedKind(kinds []string, allowedKinds []string) bool {
 	return false
 }
 
-func SummarizeIngressRules(ingresses []v1.NetworkPolicyIngressRule) string {
-	ingressString := ""
-	if len(ingresses) == 0 {
-		return "/"
-	}
-	for i, ingress := range ingresses {
-		if i > 0 {
-			ingressString += "\n"
-		}
-		peer, ports := SummarizeNetpolRule(ingress.From, ingress.Ports)
-		ingressString += fmt.Sprintf("%s<=%s", ports, peer)
-	}
-	return ingressString
-}
-
-func SummarizeEgressRules(egresses []v1.NetworkPolicyEgressRule) string {
-	egressString := ""
-	if len(egresses) == 0 {
-		return "/"
-	}
-	for i, egress := range egresses {
-		if i > 0 {
-			egressString += "\n"
-		}
-		peer, ports := SummarizeNetpolRule(egress.To, egress.Ports)
-		egressString += fmt.Sprintf("=>%s : %s", peer, ports)
-	}
-	return egressString
-}
-
-func SummarizeNetpolRule(fromTo []v1.NetworkPolicyPeer, ports []v1.NetworkPolicyPort) (string, string) {
-	peerString := ""
-	portString := ""
-	for i, peer := range fromTo {
-		if i > 0 {
-			peerString += ", "
-		}
+func buildRuleViewFromNetpolRules(fromTo []v1.NetworkPolicyPeer, ports []v1.NetworkPolicyPort) helpers.RuleView {
+	peerEndpoints := []string{}
+	peerPorts := []helpers.Ports{}
+	for _, peer := range fromTo {
 		if peer.NamespaceSelector != nil {
-			peerString += strings.Split(metav1.FormatLabelSelector(peer.NamespaceSelector), "=")[1] + "/"
+			peerEndpoints = append(peerEndpoints, strings.Split(metav1.FormatLabelSelector(peer.NamespaceSelector), "=")[1]+"/")
 		}
 		if peer.PodSelector != nil {
-			peerString += metav1.FormatLabelSelector(peer.PodSelector)
+			peerEndpoints = append(peerEndpoints, metav1.FormatLabelSelector(peer.PodSelector))
 		}
 		if peer.IPBlock != nil {
-			peerString += peer.IPBlock.CIDR
+			peerEndpoints = append(peerEndpoints, peer.IPBlock.CIDR)
 		}
 	}
-	for i, port := range ports {
-		if i > 0 {
-			portString += ", "
-		}
+	for _, port := range ports {
+		p := helpers.Ports{}
 		if port.Port != nil {
-			portString += port.Port.String()
+			p.Port = port.Port.String()
 		}
 		if port.Protocol != nil {
-			portString += "/" + string(*port.Protocol)
+			p.Protocol = string(*port.Protocol)
+		} else {
+			p.Protocol = "TCP"
 		}
+		peerPorts = append(peerPorts, p)
 	}
-	if peerString == "" && portString == "" {
-		peerString = "X"
+	return helpers.RuleView{
+		Endpoints: peerEndpoints,
+		Ports:     peerPorts,
 	}
-	return peerString, portString
 }
 
-func SummarizeCiliumIngressRules(ingresses []ciliumpolicy.IngressRule, ingressesDeny []ciliumpolicy.IngressDenyRule) string {
-	ingressString := ""
-	if len(ingresses) == 0 {
-		return "/"
+func NetworkPolicyToView(np v1.NetworkPolicy) helpers.PolicyView {
+	ingress := []helpers.RuleView{}
+	egress := []helpers.RuleView{}
+
+	for _, rule := range np.Spec.Ingress {
+		ingress = append(ingress, buildRuleViewFromNetpolRules(rule.From, rule.Ports))
 	}
-	for i, ingress := range ingresses {
-		if i > 0 {
-			ingressString += "\n"
-		}
-		cidrRule := []ciliumpolicy.CIDRRule{}
-		for _, cidr := range ingress.FromCIDR {
-			cidrRule = append(cidrRule, ciliumpolicy.CIDRRule{
-				Cidr: cidr,
-			})
+
+	for _, rule := range np.Spec.Egress {
+		egress = append(egress, buildRuleViewFromNetpolRules(rule.To, rule.Ports))
+	}
+
+	return helpers.PolicyView{
+		Kind:        "NetworkPolicy",
+		Namespace:   np.Namespace,
+		Name:        np.Name,
+		PodSelector: np.Spec.PodSelector,
+		Ingress:     ingress,
+		Egress:      egress,
+	}
+}
+
+func CiliumNetworkPolicyToView(cnp ciliumv2.CiliumNetworkPolicy) helpers.PolicyView {
+	selectors, err := ConvertEndpointSelectorToLabelSelector(cnp.Spec.EndpointSelector)
+	if err != nil {
+		fmt.Println("Error converting endpoint selector to label selector:", err)
+	}
+	return helpers.PolicyView{
+		Kind:        cnp.Kind,
+		Namespace:   cnp.Namespace,
+		Name:        cnp.Name,
+		PodSelector: *selectors,
+		Ingress:     buildRuleViewFromCiliumIngressRules(cnp.Spec.Ingress, cnp.Spec.IngressDeny),
+		Egress:      buildRuleViewFromCiliumEgressRules(cnp.Spec.Egress, cnp.Spec.EgressDeny),
+	}
+}
+
+func CiliumClusterWideNetworkPolicyToView(ccnp ciliumv2.CiliumClusterwideNetworkPolicy) helpers.PolicyView {
+	selectors, err := ConvertEndpointSelectorToLabelSelector(ccnp.Spec.EndpointSelector)
+	if err != nil {
+		fmt.Println("Error converting endpoint selector to label selector:", err)
+	}
+	return helpers.PolicyView{
+		Kind:        ccnp.Kind,
+		Namespace:   "*",
+		Name:        ccnp.Name,
+		PodSelector: *selectors,
+		Ingress:     buildRuleViewFromCiliumIngressRules(ccnp.Spec.Ingress, ccnp.Spec.IngressDeny),
+		Egress:      buildRuleViewFromCiliumEgressRules(ccnp.Spec.Egress, ccnp.Spec.EgressDeny),
+	}
+}
+
+func buildRuleViewFromCiliumIngressRules(ingresses []ciliumpolicy.IngressRule, ingressesDeny []ciliumpolicy.IngressDenyRule) []helpers.RuleView {
+	rules := []helpers.RuleView{}
+	if len(ingresses) == 0 && len(ingressesDeny) == 0 {
+		return rules
+	}
+	for _, ingress := range ingresses {
+		peerEndpoints := []string{}
+		peerPorts := []helpers.Ports{}
+		if ingress.FromCIDR != nil {
+			peerEndpoints = append(peerEndpoints, ingress.FromCIDR.String())
 		}
 		for _, cidr := range ingress.FromCIDRSet {
-			cidrRule = append(cidrRule, ciliumpolicy.CIDRRule{
-				Cidr:        cidr.Cidr,
-				ExceptCIDRs: cidr.ExceptCIDRs,
-			})
+			peerEndpoints = append(peerEndpoints, cidr.String())
 		}
-		ciliumRule := CiliumNetpolRule{
-			Endpoints: ingress.FromEndpoints,
-			Entities:  ingress.FromEntities,
-			Cidr:      cidrRule,
-			Fqdn:      []ciliumpolicy.FQDNSelector{},
+		for _, from := range ingress.FromEndpoints {
+			var peerString string
+			labelSel, err := ConvertEndpointSelectorToLabelSelector(from)
+			if err != nil {
+				fmt.Println("Error converting endpoint selector to label selector:", err)
+				peerString += "<invalid endpoint selector>"
+			} else {
+				if namespace, ok := labelSel.MatchLabels["io.kubernetes.pod.namespace"]; ok {
+					peerString += namespace + "/"
+					delete(labelSel.MatchLabels, "io.kubernetes.pod.namespace")
+				}
+				peerString += metav1.FormatLabelSelector(labelSel)
+			}
+			peerEndpoints = append(peerEndpoints, peerString)
 		}
-		peer, ports := SummarizeCiliumNetpolRule(ciliumRule, ingress.ToPorts)
-		ingressString += fmt.Sprintf("%s<=%s", ports, peer)
+		for _, entity := range ingress.FromEntities {
+			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
+		}
+		for _, port := range ingress.ToPorts {
+			for _, p := range port.Ports {
+				proto := string(p.Protocol)
+				if proto == "" {
+					proto = "ANY"
+				}
+				peerPorts = append(peerPorts, helpers.Ports{
+					Port:     p.Port,
+					Protocol: proto,
+				})
+			}
+		}
+		if len(peerEndpoints) == 0 && len(peerPorts) == 0 {
+			peerEndpoints = append(peerEndpoints, "<defaultdeny>")
+		}
+		rules = append(rules, helpers.RuleView{
+			Endpoints: peerEndpoints,
+			Ports:     peerPorts,
+		})
 	}
-	for i, ingressDeny := range ingressesDeny {
-		if i > 0 || len(ingresses) > 0 {
-			ingressString += "\n"
-		}
-		cidrRule := []ciliumpolicy.CIDRRule{}
-		for _, cidr := range ingressDeny.FromCIDR {
-			cidrRule = append(cidrRule, ciliumpolicy.CIDRRule{
-				Cidr: cidr,
-			})
+
+	for _, ingressDeny := range ingressesDeny {
+		peerEndpoints := []string{}
+		peerPorts := []helpers.Ports{}
+		if ingressDeny.FromCIDR != nil {
+			peerEndpoints = append(peerEndpoints, ingressDeny.FromCIDR.String())
 		}
 		for _, cidr := range ingressDeny.FromCIDRSet {
-			cidrRule = append(cidrRule, ciliumpolicy.CIDRRule{
-				Cidr:        cidr.Cidr,
-				ExceptCIDRs: cidr.ExceptCIDRs,
-			})
+			peerEndpoints = append(peerEndpoints, cidr.String())
 		}
-		ciliumRule := CiliumNetpolRule{
-			Endpoints: ingressDeny.FromEndpoints,
-			Entities:  ingressDeny.FromEntities,
-			Cidr:      cidrRule,
-			Fqdn:      []ciliumpolicy.FQDNSelector{},
+		for _, from := range ingressDeny.FromEndpoints {
+			var peerString string
+			labelSel, err := ConvertEndpointSelectorToLabelSelector(from)
+			if err != nil {
+				fmt.Println("Error converting endpoint selector to label selector:", err)
+				peerString += "<invalid endpoint selector>"
+			} else {
+				if namespace, ok := labelSel.MatchLabels["io.kubernetes.pod.namespace"]; ok {
+					peerString += namespace + "/"
+					delete(labelSel.MatchLabels, "io.kubernetes.pod.namespace")
+				}
+				peerString += metav1.FormatLabelSelector(labelSel)
+			}
+			peerEndpoints = append(peerEndpoints, peerString)
 		}
-		portRule := ciliumpolicy.PortRules{}
+		for _, entity := range ingressDeny.FromEntities {
+			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
+		}
 		for _, port := range ingressDeny.ToPorts {
-			portRule = append(portRule, ciliumpolicy.PortRule{
-				Ports: port.Ports,
-			})
+			for _, p := range port.Ports {
+				proto := string(p.Protocol)
+				if proto == "" {
+					proto = "ANY"
+				}
+				peerPorts = append(peerPorts, helpers.Ports{
+					Port:     p.Port,
+					Protocol: proto,
+				})
+			}
 		}
-		peer, ports := SummarizeCiliumNetpolRule(ciliumRule, portRule)
-		ingressString += fmt.Sprintf("<deny> %s<=%s", ports, peer)
+		peerEndpoints[0] = "<deny>" + peerEndpoints[0]
+		rules = append(rules, helpers.RuleView{
+			Endpoints: peerEndpoints,
+			Ports:     peerPorts,
+		})
 	}
-	return ingressString
+	return rules
 }
 
-func SummarizeCiliumEgressRules(egresses []ciliumpolicy.EgressRule, egressesDeny []ciliumpolicy.EgressDenyRule) string {
-	egressString := ""
-	if len(egresses) == 0 {
-		return "/"
+func buildRuleViewFromCiliumEgressRules(egresses []ciliumpolicy.EgressRule, egressesDeny []ciliumpolicy.EgressDenyRule) []helpers.RuleView {
+	rules := []helpers.RuleView{}
+	if len(egresses) == 0 && len(egressesDeny) == 0 {
+		return rules
 	}
-	for i, egress := range egresses {
-		if i > 0 {
-			egressString += "\n"
-		}
-		cidrRule := []ciliumpolicy.CIDRRule{}
-		for _, cidr := range egress.ToCIDR {
-			cidrRule = append(cidrRule, ciliumpolicy.CIDRRule{
-				Cidr: cidr,
-			})
+	for _, egress := range egresses {
+		peerEndpoints := []string{}
+		peerPorts := []helpers.Ports{}
+		if egress.ToCIDR != nil {
+			peerEndpoints = append(peerEndpoints, egress.ToCIDR.String())
 		}
 		for _, cidr := range egress.ToCIDRSet {
-			cidrRule = append(cidrRule, ciliumpolicy.CIDRRule{
-				Cidr:        cidr.Cidr,
-				ExceptCIDRs: cidr.ExceptCIDRs,
-			})
+			peerEndpoints = append(peerEndpoints, cidr.String())
 		}
-		ciliumRule := CiliumNetpolRule{
-			Endpoints: egress.ToEndpoints,
-			Entities:  egress.ToEntities,
-			Cidr:      cidrRule,
-			Fqdn:      egress.ToFQDNs,
+		for _, from := range egress.ToEndpoints {
+			var peerString string
+			labelSel, err := ConvertEndpointSelectorToLabelSelector(from)
+			if err != nil {
+				fmt.Println("Error converting endpoint selector to label selector:", err)
+				peerString += "<invalid endpoint selector>"
+			} else {
+				if namespace, ok := labelSel.MatchLabels["io.kubernetes.pod.namespace"]; ok {
+					peerString += namespace + "/"
+					delete(labelSel.MatchLabels, "io.kubernetes.pod.namespace")
+				}
+				peerString += metav1.FormatLabelSelector(labelSel)
+			}
+			peerEndpoints = append(peerEndpoints, peerString)
 		}
-		peer, ports := SummarizeCiliumNetpolRule(ciliumRule, egress.ToPorts)
-		egressString += fmt.Sprintf("=>%s : %s", peer, ports)
+		for _, entity := range egress.ToEntities {
+			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
+		}
+		for _, port := range egress.ToPorts {
+			for _, p := range port.Ports {
+				proto := string(p.Protocol)
+				if proto == "" {
+					proto = "ANY"
+				}
+				peerPorts = append(peerPorts, helpers.Ports{
+					Port:     p.Port,
+					Protocol: proto,
+				})
+			}
+		}
+		rules = append(rules, helpers.RuleView{
+			Endpoints: peerEndpoints,
+			Ports:     peerPorts,
+		})
 	}
-	for i, egressDeny := range egressesDeny {
-		if i > 0 || len(egresses) > 0 {
-			egressString += "\n"
-		}
-		cidrRule := []ciliumpolicy.CIDRRule{}
-		for _, cidr := range egressDeny.ToCIDR {
-			cidrRule = append(cidrRule, ciliumpolicy.CIDRRule{
-				Cidr: cidr,
-			})
+
+	for _, egressDeny := range egressesDeny {
+		peerEndpoints := []string{}
+		peerPorts := []helpers.Ports{}
+		if egressDeny.ToCIDR != nil {
+			peerEndpoints = append(peerEndpoints, egressDeny.ToCIDR.String())
 		}
 		for _, cidr := range egressDeny.ToCIDRSet {
-			cidrRule = append(cidrRule, ciliumpolicy.CIDRRule{
-				Cidr:        cidr.Cidr,
-				ExceptCIDRs: cidr.ExceptCIDRs,
-			})
+			peerEndpoints = append(peerEndpoints, cidr.String())
 		}
-		ciliumRule := CiliumNetpolRule{
-			Endpoints: egressDeny.ToEndpoints,
-			Entities:  egressDeny.ToEntities,
-			Cidr:      cidrRule,
-			Fqdn:      []ciliumpolicy.FQDNSelector{},
+		for _, from := range egressDeny.ToEndpoints {
+			var peerString string
+			labelSel, err := ConvertEndpointSelectorToLabelSelector(from)
+			if err != nil {
+				fmt.Println("Error converting endpoint selector to label selector:", err)
+				peerString += "<invalid endpoint selector>"
+			} else {
+				if namespace, ok := labelSel.MatchLabels["io.kubernetes.pod.namespace"]; ok {
+					peerString += namespace + "/"
+					delete(labelSel.MatchLabels, "io.kubernetes.pod.namespace")
+				}
+				peerString += metav1.FormatLabelSelector(labelSel)
+			}
+			peerEndpoints = append(peerEndpoints, peerString)
 		}
-		portRule := ciliumpolicy.PortRules{}
+		for _, entity := range egressDeny.ToEntities {
+			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
+		}
 		for _, port := range egressDeny.ToPorts {
-			portRule = append(portRule, ciliumpolicy.PortRule{
-				Ports: port.Ports,
-			})
-		}
-		peer, ports := SummarizeCiliumNetpolRule(ciliumRule, portRule)
-		egressString += fmt.Sprintf("<deny>=>%s : %s", peer, ports)
-	}
-	return egressString
-}
-
-type CiliumNetpolRule struct {
-	Endpoints []ciliumpolicy.EndpointSelector
-	Entities  []ciliumpolicy.Entity
-	Cidr      []ciliumpolicy.CIDRRule
-	Fqdn      []ciliumpolicy.FQDNSelector
-}
-
-func SummarizeCiliumNetpolRule(ciliumRule CiliumNetpolRule, ports ciliumpolicy.PortRules) (string, string) {
-	peerString := ""
-	portString := ""
-
-	for i, endpoint := range ciliumRule.Endpoints {
-		if i > 0 {
-			peerString += ", "
-		}
-		labelSel, err := ConvertEndpointSelectorToLabelSelector(endpoint)
-		if err != nil {
-			fmt.Println("Error converting endpoint selector to label selector:", err)
-			peerString += "<invalid endpoint selector>"
-		}
-
-		if namespace, ok := labelSel.MatchLabels["io.kubernetes.pod.namespace"]; ok {
-			peerString += namespace + "/"
-			delete(labelSel.MatchLabels, "io.kubernetes.pod.namespace")
-		}
-
-		peerString += metav1.FormatLabelSelector(labelSel)
-	}
-	for i, entity := range ciliumRule.Entities {
-		if i > 0 {
-			peerString += ", "
-		}
-		peerString += "(" + string(entity) + ")"
-	}
-	for i, cidr := range ciliumRule.Cidr {
-		if i > 0 {
-			peerString += ", "
-		}
-		peerString += string(cidr.Cidr)
-		if len(cidr.ExceptCIDRs) > 0 {
-			peerString += "-" + ciliumpolicy.CIDRSlice(cidr.ExceptCIDRs).String()
-		}
-	}
-	for i, fqdn := range ciliumRule.Fqdn {
-		if i > 0 {
-			peerString += ", "
-		}
-		peerString += fqdn.String()
-	}
-
-	for i, port := range ports {
-		if i > 0 {
-			portString += ", "
-		}
-		for i, p := range port.Ports {
-			if i > 0 {
-				portString += ", "
-			}
-			portString += p.Port
-			if p.EndPort != 0 {
-				portString += fmt.Sprintf("-%d", p.EndPort)
-			}
-			if p.Protocol != "" {
-				portString += "/" + string(p.Protocol)
+			for _, p := range port.Ports {
+				proto := string(p.Protocol)
+				if proto == "" {
+					proto = "ANY"
+				}
+				peerPorts = append(peerPorts, helpers.Ports{
+					Port:     p.Port,
+					Protocol: proto,
+				})
 			}
 		}
+		peerEndpoints[0] = "<deny>" + peerEndpoints[0]
+		rules = append(rules, helpers.RuleView{
+			Endpoints: peerEndpoints,
+			Ports:     peerPorts,
+		})
 	}
-
-	if peerString == "" && portString == "" {
-		peerString = "X"
-	}
-
-	return peerString, portString
-}
-
-func SummarizeNetworkPolicies(nps []v1.NetworkPolicy) []NetpolSummary {
-	summaries := []NetpolSummary{}
-	for _, np := range nps {
-		if slices.Contains(np.Spec.PolicyTypes, v1.PolicyTypeIngress) && np.Spec.Ingress == nil {
-			np.Spec.Ingress = []v1.NetworkPolicyIngressRule{
-				v1.NetworkPolicyIngressRule{},
-			}
-		}
-		if slices.Contains(np.Spec.PolicyTypes, v1.PolicyTypeEgress) && np.Spec.Egress == nil {
-			np.Spec.Egress = []v1.NetworkPolicyEgressRule{
-				v1.NetworkPolicyEgressRule{},
-			}
-		}
-		summary := NetpolSummary{
-			Kind:         "NetworkPolicy",
-			Namespace:    np.Namespace,
-			Name:         np.Name,
-			PodSelector:  np.Spec.PodSelector,
-			IngressRules: SummarizeIngressRules(np.Spec.Ingress),
-			EgressRules:  SummarizeEgressRules(np.Spec.Egress),
-		}
-		summaries = append(summaries, summary)
-	}
-	return summaries
-}
-
-func SummarizeCiliumNetworkPolicies(nps []ciliumv2.CiliumNetworkPolicy) ([]NetpolSummary, error) {
-	summaries := []NetpolSummary{}
-	for _, np := range nps {
-		selectors, err := ConvertEndpointSelectorToLabelSelector(np.Spec.EndpointSelector)
-		if err != nil {
-			return []NetpolSummary{}, err
-		}
-		summary := NetpolSummary{
-			Kind:         np.Kind,
-			Namespace:    np.Namespace,
-			Name:         np.Name,
-			PodSelector:  *selectors,
-			IngressRules: SummarizeCiliumIngressRules(np.Spec.Ingress, np.Spec.IngressDeny),
-			EgressRules:  SummarizeCiliumEgressRules(np.Spec.Egress, np.Spec.EgressDeny),
-		}
-		summaries = append(summaries, summary)
-	}
-	return summaries, nil
-}
-
-func SummarizeCiliumClusterWideNetworkPolicies(nps []ciliumv2.CiliumClusterwideNetworkPolicy) ([]NetpolSummary, error) {
-	summaries := []NetpolSummary{}
-	for _, np := range nps {
-		if !np.Spec.NodeSelector.IsZero() {
-			// Skip policies that apply to nodes
-			continue
-		}
-		if np.Spec.EndpointSelector.IsZero() {
-			// Skip policies that do not define endpoint selector
-			continue
-		}
-		selectors, err := ConvertEndpointSelectorToLabelSelector(np.Spec.EndpointSelector)
-		if err != nil {
-			return []NetpolSummary{}, err
-		}
-
-		summary := NetpolSummary{
-			Kind:         np.Kind,
-			Namespace:    "*",
-			Name:         np.Name,
-			PodSelector:  *selectors,
-			IngressRules: SummarizeCiliumIngressRules(np.Spec.Ingress, np.Spec.IngressDeny),
-			EgressRules:  SummarizeCiliumEgressRules(np.Spec.Egress, np.Spec.EgressDeny),
-		}
-		summaries = append(summaries, summary)
-	}
-	return summaries, nil
+	return rules
 }
 
 func ConvertEndpointSelectorToLabelSelector(es ciliumpolicy.EndpointSelector) (*metav1.LabelSelector, error) {
@@ -601,61 +531,6 @@ func ConvertEndpointSelectorToLabelSelector(es ciliumpolicy.EndpointSelector) (*
 	}
 
 	return ls, nil
-}
-
-type Column struct {
-	Header string
-	Enable bool
-	Value  func(row NetpolSummary) string
-}
-
-func displayNetpolSummaries(nps []NetpolSummary) {
-	cols := []Column{
-		{Header: "KIND", Enable: getOptions.ShowKind, Value: func(r NetpolSummary) string {
-			return r.Kind
-		}},
-		{Header: "NAMESPACE", Enable: getOptions.AllNamespaces, Value: func(r NetpolSummary) string {
-			return r.Namespace
-		}},
-		{Header: "NAME", Enable: true, Value: func(r NetpolSummary) string {
-			return r.Name
-		}},
-		{Header: "POD-SELECTOR", Enable: true, Value: func(r NetpolSummary) string {
-			return metav1.FormatLabelSelector(&r.PodSelector)
-		}},
-		{Header: "INGRESS", Enable: getOptions.ShowIngress, Value: func(r NetpolSummary) string {
-			return r.IngressRules
-		}},
-		{Header: "EGRESS", Enable: getOptions.ShowEgress, Value: func(r NetpolSummary) string {
-			return r.EgressRules
-		}},
-	}
-
-	var activeCols []Column
-	for _, c := range cols {
-		if c.Enable {
-			activeCols = append(activeCols, c)
-		}
-	}
-
-	headers := make([]string, len(activeCols))
-	for i, c := range activeCols {
-		headers[i] = c.Header
-	}
-
-	var tableRows [][]string
-	for _, np := range nps {
-		row := make([]string, len(activeCols))
-		for i, c := range activeCols {
-			row[i] = c.Value(np)
-		}
-		tableRows = append(tableRows, row)
-	}
-	table := helpers.Table{
-		Headers: headers,
-		Rows:    tableRows,
-	}
-	helpers.PrintTable(table)
 }
 
 func CheckCiliumCRDExists(ctx context.Context, config *rest.Config, crdName string) (bool, error) {
@@ -710,4 +585,26 @@ func ListCiliumClusterWideNetworkPolicies(
 	}
 
 	return ccnps, nil
+}
+
+func displayPolicies(policies []helpers.PolicyView) {
+	cols := []helpers.Column{
+		{Header: "KIND", Enable: getOptions.ShowKind},
+		{Header: "NAMESPACE", Enable: getOptions.AllNamespaces},
+		{Header: "NAME", Enable: true},
+		{Header: "POD-SELECTOR", Enable: true},
+		{Header: "INGRESS", Enable: getOptions.ShowIngress},
+		{Header: "INGRESS-PORTS", Enable: getOptions.ShowIngress},
+		{Header: "EGRESS", Enable: getOptions.ShowEgress},
+		{Header: "EGRESS-PORTS", Enable: getOptions.ShowEgress},
+	}
+
+	var activeCols []helpers.Column
+	for _, c := range cols {
+		if c.Enable {
+			activeCols = append(activeCols, c)
+		}
+	}
+
+	helpers.RenderTable(helpers.PoliciesToTableRows(policies, activeCols))
 }

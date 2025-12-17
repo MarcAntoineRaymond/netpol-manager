@@ -6,22 +6,40 @@ metadata:
   labels:
     test: test
 spec:
-  endpointSelector:
-    matchLabels:
-      app.kubernetes.io/name: test
+  endpointSelector: {}
   ingress:
-    - {}
-  egress:
-    - toEndpoints:
+    - fromEndpoints:
         - matchLabels:
             app: back
             io.kubernetes.pod.namespace: kube-system
+        - matchLabels:
+            app: test
+            io.kubernetes.pod.namespace: security
+        - matchLabels:
+            app: front
+            io.kubernetes.pod.namespace: cert-manager
       toPorts:
         - ports:
             - port: "443"
               protocol: UDP
             - port: "8080"
               protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app: back
+            io.kubernetes.pod.namespace: kube-system
+        - matchLabels:
+            app: test
+            io.kubernetes.pod.namespace: security
+        - matchLabels:
+            app: front
+            io.kubernetes.pod.namespace: cert-manager
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: UDP
+            - port: "8080"
     - toEndpoints:
         - matchLabels:
             app: front
