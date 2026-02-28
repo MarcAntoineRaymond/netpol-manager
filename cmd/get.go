@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/MarcAntoineRaymond/netpol-manager/helpers"
@@ -92,18 +93,16 @@ var getCmd = &cobra.Command{
 	Short: "Get network policies",
 	Long: `Get network policies and filter them based on various criteria.
 	You can use this command to show network policies of different kinds, filter to what pods they apply, you can reverse the lookup to see what policies apply to a given pod, and more.`,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		config, err := kubernetesOptions.configFlags.ToRESTConfig()
 		if err != nil {
-			fmt.Println(err)
-			return //err
+			return err
 		}
 
 		// Build clientset
 		clientset, err := kubernetes.NewForConfig(config)
 		if err != nil {
-			fmt.Println(err)
-			return //err
+			return err
 		}
 		ns := ""
 		if getOptions.allNamespaces {
@@ -111,21 +110,18 @@ var getCmd = &cobra.Command{
 		} else {
 			ns, err = cmd.Flags().GetString("namespace")
 			if err != nil {
-				fmt.Println(err)
-				return //err
+				return err
 			}
 			if ns == "" {
 				ns, _, err = kubernetesOptions.configFlags.ToRawKubeConfigLoader().Namespace()
 				if err != nil {
-					fmt.Println(err)
-					return //err
+					return err
 				}
 			}
 		}
 
 		if !slices.Contains(allowedOutputFormats, getOptions.outputFormat) {
-			fmt.Printf("Invalid output format: %s. Allowed formats are: %s\n", getOptions.outputFormat, strings.Join(allowedOutputFormats, ", "))
-			return //err
+			return fmt.Errorf("Invalid output format: %s. Allowed formats are: %s\n", getOptions.outputFormat, strings.Join(allowedOutputFormats, ", "))
 		}
 
 		kinds := strings.Split(getOptions.kind, ",")
@@ -146,15 +142,13 @@ var getCmd = &cobra.Command{
 				LabelSelector: getOptions.labelSelector,
 			})
 			if err != nil {
-				fmt.Println(err)
-				return //err
+				return err
 			}
 
 			for _, np := range list.Items {
 				unstructuredObj, err := PrepareUnstructured(np)
 				if err != nil {
-					fmt.Println(err)
-					return //err
+					return err
 				}
 				policyList.Items = append(policyList.Items, runtime.RawExtension{
 					Object: unstructuredObj,
@@ -167,8 +161,7 @@ var getCmd = &cobra.Command{
 			// Check for CiliumNetworkPolicies CRD and list if exists
 			exists, err := CheckCiliumCRDExists(context.TODO(), config, "ciliumnetworkpolicies.cilium.io")
 			if err != nil {
-				fmt.Println(err)
-				return //err
+				return err
 			}
 			if exists || hasCnpKind {
 				if !exists {
@@ -176,15 +169,13 @@ var getCmd = &cobra.Command{
 				}
 				cnpList, err := ListCiliumNetworkPolicies(context.TODO(), config, ns)
 				if err != nil {
-					fmt.Println(err)
-					return //err
+					return err
 				}
 
 				for _, cnp := range cnpList.Items {
 					unstructuredObj, err := PrepareUnstructured(cnp)
 					if err != nil {
-						fmt.Println(err)
-						return //err
+						return err
 					}
 					policyList.Items = append(policyList.Items, runtime.RawExtension{
 						Object: unstructuredObj,
@@ -199,8 +190,7 @@ var getCmd = &cobra.Command{
 			// Check for CiliumNetworkPolicies CRD and list if exists
 			exists, err := CheckCiliumCRDExists(context.TODO(), config, "ciliumclusterwidenetworkpolicies.cilium.io")
 			if err != nil {
-				fmt.Println(err)
-				return //err
+				return err
 			}
 			if exists || hasCcnpKind {
 				if !exists {
@@ -208,8 +198,7 @@ var getCmd = &cobra.Command{
 				}
 				ccnpList, err := ListCiliumClusterWideNetworkPolicies(context.TODO(), config)
 				if err != nil {
-					fmt.Println(err)
-					return //err
+					return err
 				}
 
 				for _, ccnp := range ccnpList.Items {
@@ -219,8 +208,7 @@ var getCmd = &cobra.Command{
 					}
 					unstructuredObj, err := PrepareUnstructured(ccnp)
 					if err != nil {
-						fmt.Println(err)
-						return //err
+						return err
 					}
 					policyList.Items = append(policyList.Items, runtime.RawExtension{
 						Object: unstructuredObj,
@@ -235,8 +223,7 @@ var getCmd = &cobra.Command{
 		if getOptions.pod != "" {
 			pod, err := clientset.CoreV1().Pods(ns).Get(context.TODO(), getOptions.pod, metav1.GetOptions{})
 			if err != nil {
-				fmt.Printf("Error retrieving pod %s: %v\n", getOptions.pod, err)
-				return //err
+				return fmt.Errorf("Error retrieving pod %s: %v\n", getOptions.pod, err)
 			}
 			filterLabels = labels.Set(pod.Labels).String()
 		}
@@ -246,8 +233,7 @@ var getCmd = &cobra.Command{
 			for _, np := range policyViews {
 				if ok, err := CheckLabelSelectorMatch(filterLabels, np.PodSelector); ok {
 					if err != nil {
-						fmt.Printf("Error comparing label selectors: %v\n", err)
-						return //err
+						return fmt.Errorf("Error comparing label selectors: %v\n", err)
 					}
 					filteredItems = append(filteredItems, np)
 				}
@@ -259,32 +245,28 @@ var getCmd = &cobra.Command{
 
 			b, err := json.Marshal(policyList)
 			if err != nil {
-				fmt.Println(err)
-				return //err
+				return err
 			}
 			fmt.Println(string(b))
-			return
+			return nil
 		}
 		if getOptions.outputFormat == "yaml" {
 
 			b, err := json.Marshal(policyList)
 			if err != nil {
-				fmt.Println(err)
-				return //err
+				return err
 			}
 			var out map[string]interface{}
 			err = json.Unmarshal(b, &out)
 			if err != nil {
-				fmt.Println(err)
-				return //err
+				return err
 			}
 			yamlBytes, err := yaml.Marshal(out)
 			if err != nil {
-				fmt.Println(err)
-				return //err
+				return err
 			}
 			fmt.Println(string(yamlBytes))
-			return
+			return nil
 		}
 		if getOptions.outputFormat == "name" {
 			for _, np := range policyViews {
@@ -294,11 +276,12 @@ var getCmd = &cobra.Command{
 					fmt.Printf("%s/%s\n", np.Kind, np.Name)
 				}
 			}
-			return
+			return nil
 		}
 
 		// Default to table output
 		displayPolicies(policyViews)
+		return nil
 	},
 }
 
@@ -457,6 +440,48 @@ func buildRuleViewFromCiliumIngressRules(ingresses []ciliumpolicy.IngressRule, i
 		for _, entity := range ingress.FromEntities {
 			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
 		}
+		for groupname, _ := range ingress.FromGroups {
+			peerEndpoints = append(peerEndpoints, "<group>:"+strconv.Itoa(groupname))
+		}
+		for _, nodes := range ingress.FromNodes {
+			var peerString string
+			labelSel, err := ConvertEndpointSelectorToLabelSelector(nodes)
+			if err != nil {
+				fmt.Println("Error converting endpoint selector to label selector:", err)
+				peerString += "<nodes>:<invalid endpoint selector>"
+			} else {
+				peerString += metav1.FormatLabelSelector(labelSel)
+			}
+			peerEndpoints = append(peerEndpoints, "<nodes>:"+peerString)
+		}
+		for _, icmp := range ingress.ICMPs {
+			var peerStringIpv4 string
+			var peerStringIpv6 string
+			var peerString string
+			for _, t := range icmp.Fields {
+				if t.Family == "IPv4" {
+					if peerStringIpv4 != "" {
+						peerStringIpv4 += ","
+					}
+					peerStringIpv4 += t.Type.String()
+				} else if t.Family == "IPv6" {
+					if peerStringIpv6 != "" {
+						peerStringIpv6 += ","
+					}
+					peerStringIpv6 += t.Type.String()
+				}
+			}
+			if peerStringIpv4 != "" {
+				peerString += "<icmp/IPv4>:" + peerStringIpv4
+			}
+			if peerStringIpv6 != "" {
+				peerString += "<icmp/IPv6>:" + peerStringIpv6
+			}
+			peerEndpoints = append(peerEndpoints, peerString)
+		}
+		if ingress.Authentication != nil {
+			peerEndpoints = append(peerEndpoints, "<authentication>:"+string(ingress.Authentication.Mode))
+		}
 		for _, port := range ingress.ToPorts {
 			for _, p := range port.Ports {
 				proto := string(p.Protocol)
@@ -540,6 +565,14 @@ func buildRuleViewFromCiliumEgressRules(egresses []ciliumpolicy.EgressRule, egre
 		for _, cidr := range egress.ToCIDRSet {
 			peerEndpoints = append(peerEndpoints, cidr.String())
 		}
+		for _, fqdn := range egress.ToFQDNs {
+			if fqdn.MatchName != "" {
+				peerEndpoints = append(peerEndpoints, fqdn.MatchName)
+			}
+			if fqdn.MatchPattern != "" {
+				peerEndpoints = append(peerEndpoints, fqdn.MatchPattern)
+			}
+		}
 		for _, from := range egress.ToEndpoints {
 			var peerString string
 			labelSel, err := ConvertEndpointSelectorToLabelSelector(from)
@@ -557,6 +590,71 @@ func buildRuleViewFromCiliumEgressRules(egresses []ciliumpolicy.EgressRule, egre
 		}
 		for _, entity := range egress.ToEntities {
 			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
+		}
+		for _, svc := range egress.ToServices {
+			if svc.K8sServiceSelector != nil {
+				var peerString string
+				labelSel, err := ConvertEndpointSelectorToLabelSelector(ciliumpolicy.EndpointSelector(svc.K8sServiceSelector.Selector))
+				if err != nil {
+					fmt.Println("Error converting endpoint selector to label selector:", err)
+					peerString += "<invalid endpoint selector>"
+				} else {
+					if svc.K8sServiceSelector.Namespace != "" {
+						peerString += svc.K8sServiceSelector.Namespace + "/"
+					}
+					peerString += metav1.FormatLabelSelector(labelSel)
+				}
+				peerEndpoints = append(peerEndpoints, "<service>:"+peerString)
+			}
+			if svc.K8sService != nil {
+				if svc.K8sService.Namespace != "" {
+					peerEndpoints = append(peerEndpoints, "<service>:"+svc.K8sService.Namespace+"/"+svc.K8sService.ServiceName)
+				} else {
+					peerEndpoints = append(peerEndpoints, "<service>:"+svc.K8sService.ServiceName)
+				}
+			}
+		}
+		for groupname, _ := range egress.ToGroups {
+			peerEndpoints = append(peerEndpoints, "<group>:"+strconv.Itoa(groupname))
+		}
+		for _, nodes := range egress.ToNodes {
+			var peerString string
+			labelSel, err := ConvertEndpointSelectorToLabelSelector(nodes)
+			if err != nil {
+				fmt.Println("Error converting endpoint selector to label selector:", err)
+				peerString += "<nodes>:<invalid endpoint selector>"
+			} else {
+				peerString += metav1.FormatLabelSelector(labelSel)
+			}
+			peerEndpoints = append(peerEndpoints, "<nodes>:"+peerString)
+		}
+		for _, icmp := range egress.ICMPs {
+			var peerStringIpv4 string
+			var peerStringIpv6 string
+			var peerString string
+			for _, t := range icmp.Fields {
+				if t.Family == "IPv4" {
+					if peerStringIpv4 != "" {
+						peerStringIpv4 += ","
+					}
+					peerStringIpv4 += t.Type.String()
+				} else if t.Family == "IPv6" {
+					if peerStringIpv6 != "" {
+						peerStringIpv6 += ","
+					}
+					peerStringIpv6 += t.Type.String()
+				}
+			}
+			if peerStringIpv4 != "" {
+				peerString += "<icmp/IPv4>:" + peerStringIpv4
+			}
+			if peerStringIpv6 != "" {
+				peerString += "<icmp/IPv6>:" + peerStringIpv6
+			}
+			peerEndpoints = append(peerEndpoints, peerString)
+		}
+		if egress.Authentication != nil {
+			peerEndpoints = append(peerEndpoints, "<authentication>:"+string(egress.Authentication.Mode))
 		}
 		for _, port := range egress.ToPorts {
 			for _, p := range port.Ports {

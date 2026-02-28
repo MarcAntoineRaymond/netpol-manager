@@ -8,9 +8,20 @@ metadata:
 spec:
   endpointSelector: {}
   ingress:
+    - fromNodes:
+        - matchLabels:
+            kubernetes.io/os: linux
+            test: "1234"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: UDP
+            - port: "8080"
+              protocol: TCP
     - fromEndpoints:
         - matchLabels:
             app: back
+            test: "123"
             io.kubernetes.pod.namespace: kube-system
         - matchLabels:
             app: test
