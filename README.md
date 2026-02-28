@@ -6,6 +6,8 @@
 
 Netpol-manager is tool to list Kubernetes Network policy and filter them based on which pods they apply to.
 
+Use `--pod mypod` to filter policy hat applies to this pod.
+
 This tool support Cilium network policy and aggregate the different policies kinds in one output. Kinds can be filtered out using `-k`.
 
 It can be used as a kubectl plugin.
