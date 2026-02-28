@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/MarcAntoineRaymond/netpol-manager/helpers"
@@ -121,7 +120,7 @@ var getCmd = &cobra.Command{
 		}
 
 		if !slices.Contains(allowedOutputFormats, getOptions.outputFormat) {
-			return fmt.Errorf("Invalid output format: %s. Allowed formats are: %s\n", getOptions.outputFormat, strings.Join(allowedOutputFormats, ", "))
+			return fmt.Errorf("Invalid output format: %s. Allowed formats are: %s", getOptions.outputFormat, strings.Join(allowedOutputFormats, ", "))
 		}
 
 		kinds := strings.Split(getOptions.kind, ",")
@@ -223,7 +222,7 @@ var getCmd = &cobra.Command{
 		if getOptions.pod != "" {
 			pod, err := clientset.CoreV1().Pods(ns).Get(context.TODO(), getOptions.pod, metav1.GetOptions{})
 			if err != nil {
-				return fmt.Errorf("Error retrieving pod %s: %v\n", getOptions.pod, err)
+				return fmt.Errorf("Error retrieving pod %s: %v", getOptions.pod, err)
 			}
 			filterLabels = labels.Set(pod.Labels).String()
 		}
@@ -233,7 +232,7 @@ var getCmd = &cobra.Command{
 			for _, np := range policyViews {
 				if ok, err := CheckLabelSelectorMatch(filterLabels, np.PodSelector); ok {
 					if err != nil {
-						return fmt.Errorf("Error comparing label selectors: %v\n", err)
+						return fmt.Errorf("Error comparing label selectors: %v", err)
 					}
 					filteredItems = append(filteredItems, np)
 				}
@@ -440,8 +439,9 @@ func buildRuleViewFromCiliumIngressRules(ingresses []ciliumpolicy.IngressRule, i
 		for _, entity := range ingress.FromEntities {
 			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
 		}
-		for groupname, _ := range ingress.FromGroups {
-			peerEndpoints = append(peerEndpoints, "<group>:"+strconv.Itoa(groupname))
+		for range ingress.FromGroups {
+			// Group information is not available in the policy view, so we just indicate that it's an AWS group as it is the only group provider currently implemented.
+			peerEndpoints = append(peerEndpoints, "<group>:AWS")
 		}
 		for _, nodes := range ingress.FromNodes {
 			var peerString string
@@ -459,16 +459,17 @@ func buildRuleViewFromCiliumIngressRules(ingresses []ciliumpolicy.IngressRule, i
 			var peerStringIpv6 string
 			var peerString string
 			for _, t := range icmp.Fields {
-				if t.Family == "IPv4" {
-					if peerStringIpv4 != "" {
-						peerStringIpv4 += ","
-					}
-					peerStringIpv4 += t.Type.String()
-				} else if t.Family == "IPv6" {
+				switch t.Family {
+				case "IPv6":
 					if peerStringIpv6 != "" {
 						peerStringIpv6 += ","
 					}
 					peerStringIpv6 += t.Type.String()
+				default: // Default to IPv4
+					if peerStringIpv4 != "" {
+						peerStringIpv4 += ","
+					}
+					peerStringIpv4 += t.Type.String()
 				}
 			}
 			if peerStringIpv4 != "" {
@@ -614,8 +615,9 @@ func buildRuleViewFromCiliumEgressRules(egresses []ciliumpolicy.EgressRule, egre
 				}
 			}
 		}
-		for groupname, _ := range egress.ToGroups {
-			peerEndpoints = append(peerEndpoints, "<group>:"+strconv.Itoa(groupname))
+		for range egress.ToGroups {
+			// Group information is not available in the policy view, so we just indicate that it's an AWS group as it is the only group provider currently implemented.
+			peerEndpoints = append(peerEndpoints, "<group>:AWS")
 		}
 		for _, nodes := range egress.ToNodes {
 			var peerString string
@@ -633,16 +635,17 @@ func buildRuleViewFromCiliumEgressRules(egresses []ciliumpolicy.EgressRule, egre
 			var peerStringIpv6 string
 			var peerString string
 			for _, t := range icmp.Fields {
-				if t.Family == "IPv4" {
-					if peerStringIpv4 != "" {
-						peerStringIpv4 += ","
-					}
-					peerStringIpv4 += t.Type.String()
-				} else if t.Family == "IPv6" {
+				switch t.Family {
+				case "IPv6":
 					if peerStringIpv6 != "" {
 						peerStringIpv6 += ","
 					}
 					peerStringIpv6 += t.Type.String()
+				default: // Default to IPv4
+					if peerStringIpv4 != "" {
+						peerStringIpv4 += ","
+					}
+					peerStringIpv4 += t.Type.String()
 				}
 			}
 			if peerStringIpv4 != "" {
