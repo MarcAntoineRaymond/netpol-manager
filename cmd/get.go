@@ -120,7 +120,7 @@ var getCmd = &cobra.Command{
 		}
 
 		if !slices.Contains(allowedOutputFormats, getOptions.outputFormat) {
-			return fmt.Errorf("Invalid output format: %s. Allowed formats are: %s", getOptions.outputFormat, strings.Join(allowedOutputFormats, ", "))
+			return fmt.Errorf("invalid output format: %s. Allowed formats are: %s", getOptions.outputFormat, strings.Join(allowedOutputFormats, ", "))
 		}
 
 		kinds := strings.Split(getOptions.kind, ",")
@@ -222,7 +222,7 @@ var getCmd = &cobra.Command{
 		if getOptions.pod != "" {
 			pod, err := clientset.CoreV1().Pods(ns).Get(context.TODO(), getOptions.pod, metav1.GetOptions{})
 			if err != nil {
-				return fmt.Errorf("Error retrieving pod %s: %v", getOptions.pod, err)
+				return fmt.Errorf("error retrieving pod %s: %v", getOptions.pod, err)
 			}
 			filterLabels = labels.Set(pod.Labels).String()
 		}
@@ -232,7 +232,7 @@ var getCmd = &cobra.Command{
 			for _, np := range policyViews {
 				if ok, err := CheckLabelSelectorMatch(filterLabels, np.PodSelector); ok {
 					if err != nil {
-						return fmt.Errorf("Error comparing label selectors: %v", err)
+						return fmt.Errorf("error comparing label selectors: %v", err)
 					}
 					filteredItems = append(filteredItems, np)
 				}
