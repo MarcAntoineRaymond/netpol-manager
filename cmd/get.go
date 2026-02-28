@@ -120,7 +120,7 @@ var getCmd = &cobra.Command{
 		}
 
 		if !slices.Contains(allowedOutputFormats, getOptions.outputFormat) {
-			return fmt.Errorf("Invalid output format: %s. Allowed formats are: %s", getOptions.outputFormat, strings.Join(allowedOutputFormats, ", "))
+			return fmt.Errorf("invalid output format: %s. Allowed formats are: %s", getOptions.outputFormat, strings.Join(allowedOutputFormats, ", "))
 		}
 
 		kinds := strings.Split(getOptions.kind, ",")
@@ -222,7 +222,7 @@ var getCmd = &cobra.Command{
 		if getOptions.pod != "" {
 			pod, err := clientset.CoreV1().Pods(ns).Get(context.TODO(), getOptions.pod, metav1.GetOptions{})
 			if err != nil {
-				return fmt.Errorf("Error retrieving pod %s: %v", getOptions.pod, err)
+				return fmt.Errorf("error retrieving pod %s: %v", getOptions.pod, err)
 			}
 			filterLabels = labels.Set(pod.Labels).String()
 		}
@@ -232,7 +232,7 @@ var getCmd = &cobra.Command{
 			for _, np := range policyViews {
 				if ok, err := CheckLabelSelectorMatch(filterLabels, np.PodSelector); ok {
 					if err != nil {
-						return fmt.Errorf("Error comparing label selectors: %v", err)
+						return fmt.Errorf("error comparing label selectors: %v", err)
 					}
 					filteredItems = append(filteredItems, np)
 				}
@@ -531,6 +531,49 @@ func buildRuleViewFromCiliumIngressRules(ingresses []ciliumpolicy.IngressRule, i
 		for _, entity := range ingressDeny.FromEntities {
 			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
 		}
+
+		for range ingressDeny.FromGroups {
+			// Group information is not available in the policy view, so we just indicate that it's an AWS group as it is the only group provider currently implemented.
+			peerEndpoints = append(peerEndpoints, "<group>:AWS")
+		}
+		for _, nodes := range ingressDeny.FromNodes {
+			var peerString string
+			labelSel, err := ConvertEndpointSelectorToLabelSelector(nodes)
+			if err != nil {
+				fmt.Println("Error converting endpoint selector to label selector:", err)
+				peerString += "<nodes>:<invalid endpoint selector>"
+			} else {
+				peerString += metav1.FormatLabelSelector(labelSel)
+			}
+			peerEndpoints = append(peerEndpoints, "<nodes>:"+peerString)
+		}
+		for _, icmp := range ingressDeny.ICMPs {
+			var peerStringIpv4 string
+			var peerStringIpv6 string
+			var peerString string
+			for _, t := range icmp.Fields {
+				switch t.Family {
+				case "IPv6":
+					if peerStringIpv6 != "" {
+						peerStringIpv6 += ","
+					}
+					peerStringIpv6 += t.Type.String()
+				default: // Default to IPv4
+					if peerStringIpv4 != "" {
+						peerStringIpv4 += ","
+					}
+					peerStringIpv4 += t.Type.String()
+				}
+			}
+			if peerStringIpv4 != "" {
+				peerString += "<icmp/IPv4>:" + peerStringIpv4
+			}
+			if peerStringIpv6 != "" {
+				peerString += "<icmp/IPv6>:" + peerStringIpv6
+			}
+			peerEndpoints = append(peerEndpoints, peerString)
+		}
+
 		for _, port := range ingressDeny.ToPorts {
 			for _, p := range port.Ports {
 				proto := string(p.Protocol)
@@ -543,7 +586,7 @@ func buildRuleViewFromCiliumIngressRules(ingresses []ciliumpolicy.IngressRule, i
 				})
 			}
 		}
-		peerEndpoints[0] = "<deny>" + peerEndpoints[0]
+		peerEndpoints[0] = "<deny>!" + peerEndpoints[0]
 		rules = append(rules, helpers.RuleView{
 			Endpoints: peerEndpoints,
 			Ports:     peerPorts,
@@ -704,6 +747,70 @@ func buildRuleViewFromCiliumEgressRules(egresses []ciliumpolicy.EgressRule, egre
 		for _, entity := range egressDeny.ToEntities {
 			peerEndpoints = append(peerEndpoints, "("+string(entity)+")")
 		}
+		for _, svc := range egressDeny.ToServices {
+			if svc.K8sServiceSelector != nil {
+				var peerString string
+				labelSel, err := ConvertEndpointSelectorToLabelSelector(ciliumpolicy.EndpointSelector(svc.K8sServiceSelector.Selector))
+				if err != nil {
+					fmt.Println("Error converting endpoint selector to label selector:", err)
+					peerString += "<invalid endpoint selector>"
+				} else {
+					if svc.K8sServiceSelector.Namespace != "" {
+						peerString += svc.K8sServiceSelector.Namespace + "/"
+					}
+					peerString += metav1.FormatLabelSelector(labelSel)
+				}
+				peerEndpoints = append(peerEndpoints, "<service>:"+peerString)
+			}
+			if svc.K8sService != nil {
+				if svc.K8sService.Namespace != "" {
+					peerEndpoints = append(peerEndpoints, "<service>:"+svc.K8sService.Namespace+"/"+svc.K8sService.ServiceName)
+				} else {
+					peerEndpoints = append(peerEndpoints, "<service>:"+svc.K8sService.ServiceName)
+				}
+			}
+		}
+		for range egressDeny.ToGroups {
+			// Group information is not available in the policy view, so we just indicate that it's an AWS group as it is the only group provider currently implemented.
+			peerEndpoints = append(peerEndpoints, "<group>:AWS")
+		}
+		for _, nodes := range egressDeny.ToNodes {
+			var peerString string
+			labelSel, err := ConvertEndpointSelectorToLabelSelector(nodes)
+			if err != nil {
+				fmt.Println("Error converting endpoint selector to label selector:", err)
+				peerString += "<nodes>:<invalid endpoint selector>"
+			} else {
+				peerString += metav1.FormatLabelSelector(labelSel)
+			}
+			peerEndpoints = append(peerEndpoints, "<nodes>:"+peerString)
+		}
+		for _, icmp := range egressDeny.ICMPs {
+			var peerStringIpv4 string
+			var peerStringIpv6 string
+			var peerString string
+			for _, t := range icmp.Fields {
+				switch t.Family {
+				case "IPv6":
+					if peerStringIpv6 != "" {
+						peerStringIpv6 += ","
+					}
+					peerStringIpv6 += t.Type.String()
+				default: // Default to IPv4
+					if peerStringIpv4 != "" {
+						peerStringIpv4 += ","
+					}
+					peerStringIpv4 += t.Type.String()
+				}
+			}
+			if peerStringIpv4 != "" {
+				peerString += "<icmp/IPv4>:" + peerStringIpv4
+			}
+			if peerStringIpv6 != "" {
+				peerString += "<icmp/IPv6>:" + peerStringIpv6
+			}
+			peerEndpoints = append(peerEndpoints, peerString)
+		}
 		for _, port := range egressDeny.ToPorts {
 			for _, p := range port.Ports {
 				proto := string(p.Protocol)
@@ -716,7 +823,7 @@ func buildRuleViewFromCiliumEgressRules(egresses []ciliumpolicy.EgressRule, egre
 				})
 			}
 		}
-		peerEndpoints[0] = "<deny>" + peerEndpoints[0]
+		peerEndpoints[0] = "<deny>!" + peerEndpoints[0]
 		rules = append(rules, helpers.RuleView{
 			Endpoints: peerEndpoints,
 			Ports:     peerPorts,
