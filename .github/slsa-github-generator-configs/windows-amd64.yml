@@ -17,4 +17,4 @@ goos: windows
 # The architecture to compile for. `GOARCH` env variable will be set to this value.
 goarch: amd64
 
-binary: kubectl-netpol-{{ .Os }}-{{ .Arch }}
+binary: kubectl-netpol-{{ .Os }}-{{ .Arch }}.exe
