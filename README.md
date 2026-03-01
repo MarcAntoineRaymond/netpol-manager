@@ -17,6 +17,7 @@ It can be used as a kubectl plugin.
 Download and copy binary in your PATH:
 
 ```sh
+wget https://github.com/MarcAntoineRaymond/netpol-manager/releases/download/1.0.0/kubectl-netpol
 mv kubectl-netpol /usr/local/bin/
 ```
 
