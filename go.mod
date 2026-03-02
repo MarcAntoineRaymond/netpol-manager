@@ -3,7 +3,7 @@ module github.com/MarcAntoineRaymond/netpol-manager
 go 1.25.0
 
 require (
-	github.com/cilium/cilium v1.19.0
+	github.com/cilium/cilium v1.19.1
 	github.com/spf13/cobra v1.10.2
 	k8s.io/api v0.35.2
 	k8s.io/apiextensions-apiserver v0.35.2
